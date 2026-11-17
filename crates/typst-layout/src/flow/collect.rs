@@ -313,7 +313,7 @@ impl<'a> Collector<'a, '_, '_> {
             _ => {}
         }
 
-        if !float && scope == PlacementScope::Parent {
+        if !float && matches!(scope, PlacementScope::Parent | PlacementScope::Outer) {
             bail!(
                 elem.span(),
                 "parent-scoped positioning is currently only available for floating placement";
@@ -461,6 +461,12 @@ pub struct MultiChild<'a> {
 }
 
 impl<'a> MultiChild<'a> {
+    /// Identifies the block for as long as the flow is laid out: children
+    /// live in the flow's arena, so the address is stable across relayouts.
+    pub fn id(&self) -> usize {
+        self as *const Self as usize
+    }
+
     /// Build the child's frames given regions.
     pub fn layout<'b>(
         &'b self,
@@ -560,6 +566,12 @@ pub struct MultiSpill<'a, 'b> {
 }
 
 impl MultiSpill<'_, '_> {
+    /// Identifies the block this is the rest of, for as long as the flow is
+    /// laid out (see `MultiChild::id`).
+    pub fn id(&self) -> usize {
+        self.multi.id()
+    }
+
     /// Build the spill's frames given regions.
     pub fn layout(
         mut self,

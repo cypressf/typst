@@ -187,6 +187,13 @@ pub enum PlacementScope {
     Column,
     /// Place relative to the parent, letting the content span over all columns.
     Parent,
+    /// Place relative to the parent of the nearest enclosing multi-column
+    /// flow, spanning all its columns, from inside a block in one of them:
+    /// the float stays beside its block's own content. It is set at the top
+    /// of a region whose first column the block fills from the top and which
+    /// the block runs on past, so it never stands above the content before
+    /// the block or beside content after it. Only floating placement.
+    Outer,
 }
 
 /// Asks the layout algorithm to place pending floating elements before

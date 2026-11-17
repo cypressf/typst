@@ -11,7 +11,7 @@ use typst_library::introspection::{
 };
 use typst_library::layout::{
     Abs, Axes, Dir, FixedAlignment, Fragment, Frame, FrameItem, FrameParent, Inherit,
-    OuterHAlignment, PlacementScope, Point, Region, Regions, Rel, Size,
+    OuterHAlignment, PlaceElem, PlacementScope, Point, Region, Regions, Rel, Size,
 };
 use typst_library::model::ArtifactKind;
 use typst_library::model::{
@@ -183,8 +183,8 @@ pub struct Composer<'a, 'b, 'x, 'y> {
     pub config: &'x Config<'x>,
     column: usize,
     page_base: Size,
-    page_insertions: Insertions<'a, 'b>,
-    column_insertions: Insertions<'a, 'b>,
+    page_insertions: Insertions,
+    column_insertions: Insertions,
     column_balancing_height: Option<Abs>,
     // These are here because they have to survive relayout (we could lose the
     // footnotes otherwise). For floats, we revisit them anyway, so it's okay to
@@ -374,7 +374,7 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
                 Err(RelayoutStop::Relayout(PlacementScope::Column)) => {
                     *self.work = checkpoint.clone();
                 }
-                Err(RelayoutStop::Relayout(PlacementScope::Parent)) => {
+                Err(RelayoutStop::Relayout(PlacementScope::Parent | PlacementScope::Outer)) => {
                     return Err(RelayoutStop::Relayout(ParentScope));
                 }
                 Err(RelayoutStop::Error(error)) => {
@@ -475,6 +475,16 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
             return Ok(());
         }
 
+        // An outer float is left to the nearest enclosing multi-column flow,
+        // which finds it in this flow's frames (see `outer_floats`). One that
+        // is directly in such a flow, or in the root flow, spans the columns
+        // like a parent-scoped float.
+        let scope = match placed.scope {
+            PlacementScope::Outer if !self.hosts_outer_floats() => return Ok(()),
+            PlacementScope::Outer => PlacementScope::Parent,
+            scope => scope,
+        };
+
         // If there is already a queued float, queue this one as well. We
         // don't want to disrupt the order.
         if !self.work.floats.is_empty() {
@@ -483,9 +493,9 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
         }
 
         // Determine the base size of the chosen scope.
-        let base = match placed.scope {
+        let base = match scope {
             PlacementScope::Column => regions.base(),
-            PlacementScope::Parent => self.page_base,
+            PlacementScope::Parent | PlacementScope::Outer => self.page_base,
         };
 
         // Lay out the placed element.
@@ -493,9 +503,9 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
 
         // Determine the remaining space in the scope. This is exact for column
         // placement, but only an approximation for page placement.
-        let remaining = match placed.scope {
+        let remaining = match scope {
             PlacementScope::Column => regions.size.y,
-            PlacementScope::Parent => {
+            PlacementScope::Parent | PlacementScope::Outer => {
                 let remaining: Abs = regions
                     .iter()
                     .map(|size| size.y)
@@ -531,17 +541,100 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
         });
 
         // Select the insertion area where we'll put this float.
-        let area = match placed.scope {
+        let area = match scope {
             PlacementScope::Column => &mut self.column_insertions,
-            PlacementScope::Parent => &mut self.page_insertions,
+            _ => &mut self.page_insertions,
         };
 
         // Put the float there.
-        area.push_float(placed, frame, align_y);
+        area.push_float(FloatPos::of(placed), frame, align_y);
         area.skips.push(loc);
 
         // Trigger relayout.
-        Err(FloatStop::Relayout(placed.scope))
+        Err(FloatStop::Relayout(scope))
+    }
+
+    /// Whether this flow places outer floats: a flow with several columns,
+    /// or the root flow.
+    fn hosts_outer_floats(&self) -> bool {
+        self.config.columns.count > 1 || self.config.mode == FlowMode::Root
+    }
+
+    /// Handles the outer floats in `frame`, a part of the breakable block
+    /// `block` (see `MultiChild::id`) that the distributor is about to place:
+    /// queues those it hasn't seen, and places the block's first queued one
+    /// across the columns if the block lets it stand beside its own content
+    /// here. That is, if this part of the block starts at the top of the first
+    /// column (`at_top`) and the block runs on into the next column
+    /// (`continues`). When a block ends with floats still queued, they're
+    /// placed at the next place any block allows, as there is none left in
+    /// their own.
+    pub fn outer_floats(
+        &mut self,
+        regions: &Regions,
+        frame: &Frame,
+        block: usize,
+        at_top: bool,
+        continues: bool,
+    ) -> Result<(), FloatStop<()>> {
+        // Only the multi-column flow nearest the float collects it; the flows
+        // around that one see it in its frames too, already placed.
+        if self.config.columns.count < 2 {
+            return Ok(());
+        }
+        let styles = self.config.shared;
+        let mut found = vec![];
+        find_in_frame_impl::<PlaceElem>(&mut found, frame, Abs::zero());
+        for (_, elem) in found {
+            let loc = elem.location().unwrap();
+            let outer = elem.scope.get(styles) == PlacementScope::Outer && elem.float.get(styles);
+            let queued = self.work.outer_floats.iter().any(|(e, ..)| e.location() == Some(loc));
+            if outer && !queued && !self.skipped(loc) {
+                self.work.outer_floats.push((elem, block, false));
+            }
+        }
+        let skips: Vec<Location> = self.work.outer_floats.iter().filter_map(|(e, ..)| e.location()).filter(|l| self.skipped(*l)).collect();
+        self.work.outer_floats.retain(|(e, ..)| !e.location().is_some_and(|l| skips.contains(&l)));
+        if !continues {
+            // The block ends here: whatever it left queued has no place in it.
+            for (_, b, orphan) in self.work.outer_floats.make_mut() {
+                *orphan |= *b == block;
+            }
+        }
+        let next = self.work.outer_floats.iter().position(|(_, b, orphan)| *b == block || *orphan);
+        let Some(index) = next else { return Ok(()) };
+        let (elem, _, orphan) = self.work.outer_floats[index].clone();
+        if !(self.column == 0 && at_top && (continues || orphan)) {
+            return Ok(());
+        }
+
+        let loc = elem.location().unwrap();
+        let base = self.page_base;
+        let frame = crate::layout_frame(
+            self.engine,
+            &elem.body,
+            Locator::synthesize(loc),
+            styles,
+            Region::new(base, Axes::splat(false)),
+        )?;
+        let clearance = elem.clearance.resolve(styles);
+        let remaining: Abs = regions
+            .iter()
+            .map(|size| size.y)
+            .take(self.config.columns.count - self.column)
+            .sum::<Abs>()
+            / self.config.columns.count as f64;
+        if !remaining.fits(frame.height() + clearance) && regions.may_progress() {
+            return Ok(());
+        }
+        let align_x = elem.alignment.get(styles).map_or(FixedAlignment::Center, |align| {
+            align.x().unwrap_or_default().resolve(styles)
+        });
+        let delta = Axes::new(elem.dx.get(styles), elem.dy.get(styles)).resolve(styles);
+        self.page_insertions.push_float(FloatPos { align_x, delta, clearance }, frame, FixedAlignment::Start);
+        self.page_insertions.skips.push(loc);
+        self.work.outer_floats.remove(index);
+        Err(FloatStop::Relayout(PlacementScope::Parent))
     }
 
     /// Lays out footnotes in the `frame` if this is the root flow and there are
@@ -850,11 +943,24 @@ fn layout_column_separator(
     )
 }
 
+/// Where a float goes in its insertion area.
+struct FloatPos {
+    align_x: FixedAlignment,
+    delta: Axes<Rel<Abs>>,
+    clearance: Abs,
+}
+
+impl FloatPos {
+    fn of(placed: &PlacedChild) -> Self {
+        Self { align_x: placed.align_x, delta: placed.delta, clearance: placed.clearance }
+    }
+}
+
 /// An additive list of insertions.
 #[derive(Default)]
-struct Insertions<'a, 'b> {
-    top_floats: Vec<(&'b PlacedChild<'a>, Frame)>,
-    bottom_floats: Vec<(&'b PlacedChild<'a>, Frame)>,
+struct Insertions {
+    top_floats: Vec<(FloatPos, Frame)>,
+    bottom_floats: Vec<(FloatPos, Frame)>,
     footnotes: Vec<Frame>,
     footnote_separator: Option<Frame>,
     top_size: Abs,
@@ -864,14 +970,9 @@ struct Insertions<'a, 'b> {
     skips: Vec<Location>,
 }
 
-impl<'a, 'b> Insertions<'a, 'b> {
+impl Insertions {
     /// Add a float to the top or bottom area.
-    fn push_float(
-        &mut self,
-        placed: &'b PlacedChild<'a>,
-        frame: Frame,
-        align_y: FixedAlignment,
-    ) {
+    fn push_float(&mut self, placed: FloatPos, frame: Frame, align_y: FixedAlignment) {
         self.width.set_max(frame.width());
 
         let amount = frame.height() + placed.clearance;

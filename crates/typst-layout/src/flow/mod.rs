@@ -21,7 +21,7 @@ use typst_library::introspection::{
     Introspector, Location, Locator, LocatorLink, SplitLocator, Tag,
 };
 use typst_library::layout::{
-    Abs, Angle, ColumnsElem, Dir, Em, Fragment, Frame, HAlignment, PageElem, Region,
+    Abs, Angle, ColumnsElem, Dir, Em, Fragment, Frame, HAlignment, PageElem, PlaceElem, Region,
     Regions, Rel, Size, VAlignment,
 };
 use typst_library::model::{
@@ -316,6 +316,10 @@ struct Work<'a, 'b> {
     floats: EcoVec<&'b PlacedChild<'a>>,
     /// Queued footnotes that didn't fit in previous regions.
     footnotes: EcoVec<Packed<FootnoteElem>>,
+    /// Outer floats found in a block that haven't been placed yet, with the
+    /// block they're in (see `MultiChild::id`) and whether it has ended (see
+    /// `Composer::outer_floats`).
+    outer_floats: EcoVec<(Packed<PlaceElem>, usize, bool)>,
     /// Spilled frames of a footnote that didn't fully fit. Similar to `spill`.
     footnote_spill: Option<std::vec::IntoIter<Frame>>,
     /// Queued tags that will be attached to the next frame.
@@ -334,6 +338,7 @@ impl<'a, 'b> Work<'a, 'b> {
             spill: None,
             floats: EcoVec::new(),
             footnotes: EcoVec::new(),
+            outer_floats: EcoVec::new(),
             footnote_spill: None,
             tags: EcoVec::new(),
             skips: Rc::new(FxHashSet::default()),

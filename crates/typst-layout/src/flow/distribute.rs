@@ -424,6 +424,8 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
             return Err(Stop::Finish(Finish::Soft));
         }
 
+        let at_top = !self.has_frame();
+        self.composer.outer_floats(&self.regions, &frame, multi.id(), at_top, spill.is_some())?;
         self.frame(frame, multi.align, multi.sticky, true)?;
 
         // If the block didn't fully fit into the current region, save it into
@@ -455,7 +457,10 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
 
         // Lay out the spilled remains.
         let align = spill.align();
+        let block = spill.id();
         let (frame, spill) = spill.layout(self.composer.engine, pod)?;
+        let at_top = !self.has_frame();
+        self.composer.outer_floats(&self.regions, &frame, block, at_top, spill.is_some())?;
         self.frame(frame, align, false, true)?;
 
         // If there's still more, save it into the `spill` and finish the
