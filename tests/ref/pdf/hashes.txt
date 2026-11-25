@@ -116,6 +116,7 @@ bd79220b2ab641187e5c311443ab03ff columns-balanced-leftover-6
 03ac29f29e6217f80640a9a3362ec38e columns-balanced-lists
 201352d61ed3f7b87b7010aea4650fa4 columns-balanced-pagebreak
 5a2317df5d041304d1a12ef68acc89f3 columns-balanced-tables
+0a054ec9e7281ba76fcfe7727212e58f columns-balanced-unbreakable-spill
 cd6491bc7c108f3b3be2f70f25d61f47 columns-balanced-widow
 654fce76fc39360b2865c0c3f24f3f51 columns-colbreak-after-place
 73fd768e2c8e0f794893f42c43cd11ae columns-empty-second-column

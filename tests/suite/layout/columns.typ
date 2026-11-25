@@ -300,3 +300,15 @@ B
 #rect(width: 100%)[1]
 #colbreak()
 #rect(width: 100%)[2]
+
+--- columns-balanced-unbreakable-spill paged ---
+// An unbreakable block that a breakable one spills onto the last page with is
+// set whole, starting the first column, not cut to the balancing height and
+// printed over what follows.
+#set page(width: 200pt, height: 160pt, margin: 10pt)
+#set text(size: 7pt)
+#columns(2, balanced: true, gutter: 10pt)[
+  #for i in range(29) [Line #i of text.\ ]
+  #block(breakable: true)[Last. #block(breakable: false, rect(width: 100%, height: 70pt, fill: eastern))]
+]
+#rect(width: 100%, height: 8pt, fill: red)

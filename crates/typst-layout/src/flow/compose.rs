@@ -257,6 +257,9 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
         let mut offset = Abs::zero();
         let mut locator = locator.split();
         let mut total_used_height = Abs::zero();
+        let mut tallest_column = Abs::zero();
+        let mut empty_before_content = false;
+        let mut seen_empty = false;
         let mut last_column_separator_height = None;
 
         // Lay out the columns and stitch them together.
@@ -265,6 +268,12 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
             let (frame, used_height, column_separator_height) =
                 self.column(locator.next(&()), inner)?;
             total_used_height += used_height;
+            tallest_column.set_max(used_height);
+            if used_height.is_zero() {
+                seen_empty = true;
+            } else if seen_empty {
+                empty_before_content = true;
+            }
 
             if !regions.expand.y {
                 output.size_mut().y.set_max(frame.height());
@@ -321,7 +330,15 @@ impl<'a, 'b> Composer<'a, 'b, '_, '_> {
 
         // Column balancing with re-layout
         if self.config.columns.balanced && self.work.done() {
-            let height = total_used_height / self.config.columns.count as f64;
+            let mut height = total_used_height / self.config.columns.count as f64;
+            // A column left empty while a later one has content could not start
+            // with what came next: an unbreakable block taller than the
+            // balancing height, which a breakable block around it may not
+            // protrude past. Raise the height to the tallest column, so that
+            // the block starts in the first column instead.
+            if empty_before_content {
+                height.set_max(tallest_column);
+            }
             if self.column_balancing_height.is_none_or(|h| h < height) {
                 self.column_balancing_height = Some(height);
                 return Err(RelayoutStop::Relayout(ParentScope));
