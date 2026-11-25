@@ -368,10 +368,32 @@ impl<'a, 'b> Distributor<'a, 'b, '_, '_, '_> {
     /// Processes an unbreakable block.
     fn single(&mut self, single: &'b SingleChild<'a>) -> Result<(), Stop> {
         // Lay out the block.
-        let frame = single.layout(
-            self.composer.engine,
-            Region::new(self.regions.base(), self.regions.expand),
-        )?;
+        let base = self.regions.base();
+        let frame = single
+            .layout(self.composer.engine, Region::new(base, self.regions.expand))?;
+
+        // A block is cut to the region's full height. Where column balancing
+        // has shrunk the region of a breakable block that this is in, that is
+        // only the balancing height, and a taller block, cut to it, would seem
+        // to fit and print over what follows. So a block that came out at the
+        // full height, where a taller region follows, is measured in that one:
+        // taller there (but not filling it, as a block sized to its region
+        // would), it doesn't fit here.
+        let cut = self.regions.last.is_some_and(|last| {
+            last > base.y
+                && frame.height().approx_eq(base.y)
+                && single
+                    .layout(
+                        self.composer.engine,
+                        Region::new(Size::new(base.x, last), self.regions.expand),
+                    )
+                    .is_ok_and(|natural| {
+                        natural.height() > base.y && natural.height() < last
+                    })
+        });
+        if cut && self.regions.may_progress() {
+            return Err(Stop::Finish(Finish::Soft));
+        }
 
         // Handle fractionally sized blocks.
         if let Some(fr) = single.fr {
